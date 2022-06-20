@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from termcolor import cprint
 from utils_torch_filter import TORCHIEKF
+from torch.utils.tensorboard import SummaryWriter
 from utils import prepare_data
 import copy
 
@@ -31,7 +32,7 @@ def compute_delta_p(Rot, p):
 
     step_size = 10  # every second
     distances = np.zeros(p.shape[0])
-    dp = p[1:] - p[:-1]  #  this must be ground truth
+    dp = p[1:] - p[:-1]  #  this must be ground truth
     distances[1:] = dp.norm(dim=1).cumsum(0).numpy()
 
     seq_lengths = [100, 200, 300, 400, 500, 600, 700, 800]
@@ -57,17 +58,20 @@ def compute_delta_p(Rot, p):
 
 
 def train_filter(args, dataset):
+    writer = SummaryWriter(args.tensorboard_path + '/{}_'.format(time.strftime("%b_%a_%d_%H_%M_%S")))
     iekf = prepare_filter(args, dataset)
     prepare_loss_data(args, dataset)
-    save_iekf(args, iekf)
+    save_iekf(args, iekf, 0)
     optimizer = set_optimizer(iekf)
     start_time = time.time()
 
     for epoch in range(1, args.epochs + 1):
-        train_loop(args, dataset, epoch, iekf, optimizer, args.seq_dim)
-        save_iekf(args, iekf)
+        train_loop(args, dataset, epoch, iekf, optimizer, args.seq_dim, writer)
+        if epoch % 100 == 0:
+            save_iekf(args, iekf, epoch)
         print("Amount of time spent for 1 epoch: {}s\n".format(int(time.time() - start_time)))
         start_time = time.time()
+    save_iekf(args, iekf, 'final')
 
 
 def prepare_filter(args, dataset):
@@ -89,8 +93,6 @@ def prepare_filter(args, dataset):
 
 
 def prepare_loss_data(args, dataset):
-
-
 
     file_delta_p = os.path.join(args.path_temp, 'delta_p.p')
     if os.path.isfile(file_delta_p):
@@ -124,7 +126,7 @@ def prepare_loss_data(args, dataset):
     list_rpe_ = copy.deepcopy(list_rpe)
     dataset.list_rpe = {}
     for dataset_name, rpe in list_rpe_.items():
-        if len(rpe[0]) is not 0:
+        if len(rpe[0]) != 0:
             dataset.list_rpe[dataset_name] = list_rpe[dataset_name]
         else:
             dataset.datasets_train_filter.pop(dataset_name)
@@ -134,7 +136,7 @@ def prepare_loss_data(args, dataset):
     list_rpe_validation_ = copy.deepcopy(list_rpe_validation)
     dataset.list_rpe_validation = {}
     for dataset_name, rpe in list_rpe_validation_.items():
-        if len(rpe[0]) is not 0:
+        if len(rpe[0]) != 0:
             dataset.list_rpe_validation[dataset_name] = list_rpe_validation[dataset_name]
         else:
             dataset.datasets_validatation_filter.pop(dataset_name)
@@ -146,7 +148,7 @@ def prepare_loss_data(args, dataset):
     dataset.dump(mondict, file_delta_p)
 
 
-def train_loop(args, dataset, epoch, iekf, optimizer, seq_dim):
+def train_loop(args, dataset, epoch, iekf, optimizer, seq_dim, writer):
     loss_train = 0
     optimizer.zero_grad()
     for i, (dataset_name, Ns) in enumerate(dataset.datasets_train_filter.items()):
@@ -156,7 +158,7 @@ def train_loop(args, dataset, epoch, iekf, optimizer, seq_dim):
         loss = mini_batch_step(dataset, dataset_name, iekf,
                                dataset.list_rpe[dataset_name], t, ang_gt, p_gt, v_gt, u, N0)
 
-        if loss is -1 or torch.isnan(loss):
+        if loss == -1 or torch.isnan(loss):
             cprint("{} loss is invalid".format(i), 'yellow')
             continue
         elif loss > max_loss:
@@ -167,8 +169,9 @@ def train_loop(args, dataset, epoch, iekf, optimizer, seq_dim):
             cprint("{} loss: {:.5f}".format(i, loss))
 
     if loss_train == 0: 
-        return 
-    loss_train.backward()  # loss_train.cuda().backward()  
+        return
+    writer.add_scalar('loss', loss_train, epoch)  # add the network to the tensorborad
+    loss_train.backward()  # loss_train.cuda().backward()  #
     g_norm = torch.nn.utils.clip_grad_norm_(iekf.parameters(), max_grad_norm)
     if np.isnan(g_norm) or g_norm > 3*max_grad_norm:
         cprint("gradient norm: {:.5f}".format(g_norm), 'yellow')
@@ -182,8 +185,8 @@ def train_loop(args, dataset, epoch, iekf, optimizer, seq_dim):
     return loss_train
 
 
-def save_iekf(args, iekf):
-    file_name = os.path.join(args.path_temp, "iekfnets.p")
+def save_iekf(args, iekf, n=0):
+    file_name = os.path.join(args.path_temp, "iekfnets_{}.p".format(n))
     torch.save(iekf.state_dict(), file_name)
     print("The IEKF nets are saved in the file " + file_name)
 
@@ -191,7 +194,7 @@ def save_iekf(args, iekf):
 def mini_batch_step(dataset, dataset_name, iekf, list_rpe, t, ang_gt, p_gt, v_gt, u, N0):
     iekf.set_Q()
     measurements_covs = iekf.forward_nets(u)
-    Rot, v, p, b_omega, b_acc, Rot_c_i, t_c_i = iekf.run(t, u,measurements_covs,
+    Rot, v, p, b_omega, b_acc, Rot_c_i, t_c_i = iekf.run(t, u, measurements_covs,
                                                             v_gt, p_gt, t.shape[0],
                                                             ang_gt[0])
     delta_p, delta_p_gt = precompute_lost(Rot, p, list_rpe, N0)
@@ -262,7 +265,7 @@ def precompute_lost(Rot, p, list_rpe, N0):
     delta_p_gt = delta_p_gt[idxs]
     idxs_end_bis = idxs_end[idxs]
     idxs_0_bis = idxs_0[idxs]
-    if len(idxs_0_bis) is 0: 
+    if len(idxs_0_bis) == 0:
         return None, None     
     else:
         delta_p = Rot_10_Hz[idxs_0_bis].transpose(-1, -2).matmul(

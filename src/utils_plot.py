@@ -6,6 +6,8 @@ import numpy as np
 from itertools import chain
 from utils import *
 from utils_torch_filter import TORCHIEKF
+import pandas
+
 
 def results_filter(args, dataset):
 
@@ -94,7 +96,7 @@ def results_filter(args, dataset):
         fig3, ax3 = plt.subplots(figsize=(20, 10))
         # position in plan after alignment
         fig4, ax4 = plt.subplots(figsize=(20, 10))
-        #  Measurement covariance in log scale and normalized inputs
+        #  Measurement covariance in log scale and normalized inputs
         fig5, axs5 = plt.subplots(3, 1, sharex=True, figsize=(20, 10))
         # input: gyro, accelerometer
         fig6, axs6 = plt.subplots(2, 1, sharex=True, figsize=(20, 10))
@@ -120,7 +122,27 @@ def results_filter(args, dataset):
         ax4.plot(p_align[:, 0], p_align[:, 1])
         ax4.axis('equal')
 
-        axs5[0].plot(t, np.log10(measurements_covs))
+        axs5[0].plot(t, np.log10(measurements_covs[:, 0]), c='tab:blue', alpha=0.35)
+        axs5[0].plot(t, np.log10(measurements_covs[:, 1]), c='tab:orange', alpha=0.35)
+        xmin, xmax = axs5[0].get_xlim()
+        N = 50
+        ti = int((N-1)/2)
+        tf = (N-1)-ti
+        conv_cov_0 = np.log10(np.convolve(measurements_covs[:, 0], np.ones(N), 'valid')/N)
+        conv_cov_1 = np.log10(np.convolve(measurements_covs[:, 1], np.ones(N), 'valid')/N)
+        mean_cov_0, mean_cov_1 = np.log10(np.mean(measurements_covs[:, 0])), np.log10(np.mean(measurements_covs[:, 1]))
+
+        axs5[0].plot(t[ti:-tf], conv_cov_0, c='tab:blue', alpha=1, label=r'$z_{n}^{lat}$')
+        axs5[0].axhline(mean_cov_0, xmin=0, xmax=np.max(t), c='tab:blue', ls='--')
+        axs5[0].text(xmin+0.01*abs(xmax-xmin), mean_cov_0, f"mean\n{mean_cov_0:.2f}", color="tab:blue", ha='left',
+                     va='center', fontdict=dict(size=10, weight='bold'),
+                     bbox=dict(facecolor="#fff", edgecolor="tab:blue", pad=0.4, boxstyle="round", linewidth=1.5))
+
+        axs5[0].plot(t[ti:-tf], conv_cov_1, c='tab:orange', alpha=1, label=r'$z_{n}^{up}$')
+        axs5[0].axhline(mean_cov_1, xmin=0, xmax=np.max(t), c='tab:orange', ls='--')
+        axs5[0].text(xmin+0.01*abs(xmax-xmin), mean_cov_1, f"mean\n{mean_cov_1:.2f}", color="tab:orange", ha='left',
+                     va='center', fontdict=dict(size=10, weight='bold'),
+                     bbox=dict(facecolor="#fff", edgecolor="tab:orange", pad=0.4, boxstyle="round", linewidth=1.5))
         axs5[1].plot(t, u_normalized[:, :3])
         axs5[2].plot(t, u_normalized[:, 3:])
 
@@ -153,7 +175,7 @@ def results_filter(args, dataset):
         axs5[1].set(xlabel='time (s)', ylabel=r'Normalized gyro measurements',
                      title="Normalized gyro measurements")
         axs5[2].set(xlabel='time (s)', ylabel=r'Normalized accelerometer measurements',
-                   title="Normalized accelerometer measurements")
+                    title="Normalized accelerometer measurements")
         axs6[0].set(xlabel='time (s)', ylabel=r'$\omega^x_n, \omega^y_n, \omega^z_n$ (rad/s)',
                     title="Gyrometer")
         axs6[1].set(xlabel='time (s)', ylabel=r'$a^x_n, a^y_n, a^z_n$ (m/$\mathrm{s}^2$)',
@@ -184,7 +206,7 @@ def results_filter(args, dataset):
             ['$b_n^x$', '$b_n^y$', '$b_n^z$', '$\hat{b}_n^x$', '$\hat{b}_n^y$', '$\hat{b}_n^z$'])
         ax3.legend(['ground-truth trajectory', 'proposed'])
         ax4.legend(['ground-truth trajectory', 'proposed'])
-        axs5[0].legend(['zero lateral velocity', 'zero vertical velocity'])
+        axs5[0].legend()  # ['zero lateral velocity', 'zero vertical velocity']
         axs6[0].legend(['$\omega_n^x$', '$\omega_n^y$', '$\omega_n^z$'])
         axs6[1].legend(['$a_n^x$', '$a_n^y$', '$a_n^z$'])
         if u.shape[1] > 6:
@@ -200,7 +222,7 @@ def results_filter(args, dataset):
             fig_name = figs_name[l]
             fig.savefig(os.path.join(folder_path, fig_name + ".png"))
 
-        plt.show(block=True)
+        # plt.show(block=True)
 
 
 

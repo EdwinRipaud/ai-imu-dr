@@ -125,7 +125,7 @@ class BaseDataset(Dataset):
         return u_normalized
 
     def add_noise(self, u):
-        w = torch.randn_like(u[:, :6]) # noise
+        w = torch.randn_like(u[:, :6]) # noise
         w_b = torch.randn_like(u[0, :6])  # bias
         w[:, :3] *= self.sigma_gyro
         w[:, 3:6] *= self.sigma_acc

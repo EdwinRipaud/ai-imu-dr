@@ -72,12 +72,12 @@ class KITTIDataset(BaseDataset):
                                                                                      'wf, wl, wu, '
                                                                                      '' +
                             'pos_accuracy, vel_accuracy, ' + 'navstat, numsats, ' + 'posmode, '
-                                                                                  'velmode, '
-                                                                                  'orimode')
+                                                                                    'velmode, '
+                                                                                    'orimode')
 
     # Bundle into an easy-to-access structure
     OxtsData = namedtuple('OxtsData', 'packet, T_w_imu')
-    min_seq_dim = 25 * 100  # 60 s
+    min_seq_dim = 60 * 100  # 60 s
     datasets_fake = ['2011_09_26_drive_0093_extract', '2011_09_28_drive_0039_extract',
                      '2011_09_28_drive_0002_extract']
     """
@@ -90,9 +90,6 @@ class KITTIDataset(BaseDataset):
     # The following dict lists the name and end frame of each sequence that
     # has been used to extract the visual odometry / SLAM training set
     odometry_benchmark = OrderedDict()
-    odometry_benchmark["2011_10_03_drive_0027_extract"] = [0, 45692]
-    odometry_benchmark["2011_10_03_drive_0042_extract"] = [0, 12180]
-    odometry_benchmark["2011_10_03_drive_0034_extract"] = [0, 47935]
     odometry_benchmark["2011_09_26_drive_0067_extract"] = [0, 8000]
     odometry_benchmark["2011_09_30_drive_0016_extract"] = [0, 2950]
     odometry_benchmark["2011_09_30_drive_0018_extract"] = [0, 28659]
@@ -101,6 +98,9 @@ class KITTIDataset(BaseDataset):
     odometry_benchmark["2011_09_30_drive_0028_extract"] = [11231, 53650]
     odometry_benchmark["2011_09_30_drive_0033_extract"] = [0, 16589]
     odometry_benchmark["2011_09_30_drive_0034_extract"] = [0, 12744]
+    odometry_benchmark["2011_10_03_drive_0027_extract"] = [0, 45692]
+    odometry_benchmark["2011_10_03_drive_0042_extract"] = [0, 12180]
+    odometry_benchmark["2011_10_03_drive_0034_extract"] = [0, 47935]
 
     odometry_benchmark_img = OrderedDict()
     odometry_benchmark_img["2011_10_03_drive_0027_extract"] = [0, 45400]
@@ -119,20 +119,24 @@ class KITTIDataset(BaseDataset):
         super(KITTIDataset, self).__init__(args)
 
         self.datasets_validatation_filter['2011_09_30_drive_0028_extract'] = [11231, 53650]
-        self.datasets_train_filter["2011_10_03_drive_0042_extract"] = [0, None]
         self.datasets_train_filter["2011_09_30_drive_0018_extract"] = [0, 15000]
         self.datasets_train_filter["2011_09_30_drive_0020_extract"] = [0, None]
         self.datasets_train_filter["2011_09_30_drive_0027_extract"] = [0, None]
         self.datasets_train_filter["2011_09_30_drive_0033_extract"] = [0, None]
+        self.datasets_train_filter["2011_09_30_drive_0034_extract"] = [0, None]
         self.datasets_train_filter["2011_10_03_drive_0027_extract"] = [0, 18000]
         self.datasets_train_filter["2011_10_03_drive_0034_extract"] = [0, 31000]
-        self.datasets_train_filter["2011_09_30_drive_0034_extract"] = [0, None]
+        self.datasets_train_filter["2011_10_03_drive_0042_extract"] = [0, None]
 
         for dataset_fake in KITTIDataset.datasets_fake:
             if dataset_fake in self.datasets:
                 self.datasets.remove(dataset_fake)
             if dataset_fake in self.datasets_train:
                 self.datasets_train.remove(dataset_fake)
+        # replace the 'None' length value by the actual maximum length of the sequence
+        for dataset_train in list(self.datasets_train_filter.keys()):
+            if dataset_train in self.datasets:
+                self.datasets_train_filter[dataset_train] = [0, len(self[self.datasets.index(dataset_train)]['t'])]
 
     @staticmethod
     def read_data(args):
@@ -169,7 +173,7 @@ class KITTIDataset(BaseDataset):
                 """
 
                 print("\n Sequence name : " + date_dir2)
-                if len(oxts) < KITTIDataset.min_seq_dim:  #  sequence shorter than 30 s are rejected
+                if len(oxts) < KITTIDataset.min_seq_dim:  # sequence shorter than 30 s are rejected
                     cprint("Dataset is too short ({:.2f} s)".format(len(oxts) / 100), 'yellow')
                     continue
                 lat_oxts = np.zeros(len(oxts))
@@ -256,7 +260,7 @@ class KITTIDataset(BaseDataset):
                 mondict = {
                     't': t, 'p_gt': p_gt, 'ang_gt': ang_gt, 'v_gt': v_gt,
                     'u': u, 'name': date_dir2, 't0': t0
-                    }
+                }
 
                 t_tot += t[-1] - t[0]
                 KITTIDataset.dump(mondict, args.path_data_save, date_dir2)
@@ -425,7 +429,7 @@ def test_filter(args, dataset):
     torch_iekf.filter_parameters = KITTIParameters()
     torch_iekf.set_param_attr()
 
-    torch_iekf.load(args, dataset)
+    torch_iekf.load(args, dataset, args.iteration)
     iekf.set_learned_covariance(torch_iekf)
 
     for i in range(0, len(dataset.datasets)):
@@ -434,15 +438,16 @@ def test_filter(args, dataset):
             continue
         print("Test filter on sequence: " + dataset_name)
         t, ang_gt, p_gt, v_gt, u = prepare_data(args, dataset, dataset_name, i,
-                                                       to_numpy=True)
+                                                to_numpy=True)
         N = None
         u_t = torch.from_numpy(u).double()
         measurements_covs = torch_iekf.forward_nets(u_t)
-        measurements_covs = measurements_covs.detach().numpy()
+        measurements_covs = np.concatenate((0.05*np.ones((u.shape[0], 1)), 0.5*np.ones((u.shape[0], 1))), axis=1)
+        # measurements_covs = measurements_covs.detach().numpy()
         start_time = time.time()
         Rot, v, p, b_omega, b_acc, Rot_c_i, t_c_i = iekf.run(t, u, measurements_covs,
-                                                                   v_gt, p_gt, N,
-                                                                   ang_gt[0])
+                                                             v_gt, p_gt, N,
+                                                             ang_gt[0])
         diff_time = time.time() - start_time
         print("Execution time: {:.2f} s (sequence time: {:.2f} s)".format(diff_time,
                                                                           t[-1] - t[0]))
@@ -450,35 +455,36 @@ def test_filter(args, dataset):
             't': t, 'Rot': Rot, 'v': v, 'p': p, 'b_omega': b_omega, 'b_acc': b_acc,
             'Rot_c_i': Rot_c_i, 't_c_i': t_c_i,
             'measurements_covs': measurements_covs,
-            }
+        }
         dataset.dump(mondict, args.path_results, dataset_name + "_filter.p")
 
 
 class KITTIArgs():
-        path_data_base = "/media/mines/46230797-4d43-4860-9b76-ce35e699ea47/KITTI/raw"
-        path_data_save = "../data"
-        path_results = "../results"
-        path_temp = "../temp"
+    iteration = 400
+    path_data_base = "/home/eripaud/Documents/Edwin Storage/Big data base"  # "../data base"
+    path_data_save = "../data"
+    path_results = f"../results_{iteration}"
+    path_temp = "../temp"
+    tensorboard_path = "../Runs_loss"
 
-        epochs = 400
-        seq_dim = 6000
+    epochs = 20
+    seq_dim = 6000
 
-        # training, cross-validation and test dataset
-        cross_validation_sequences = ['2011_09_30_drive_0028_extract']
-        test_sequences = ['2011_09_30_drive_0028_extract']
-        continue_training = True
+    # training, cross-validation and test dataset
+    cross_validation_sequences = ['2011_09_30_drive_0028_extract']
+    test_sequences = ['2011_09_30_drive_0028_extract']
+    continue_training = False
 
-        # choose what to do
-        read_data = 0
-        train_filter = 0
-        test_filter = 1
-        results_filter = 1
-        dataset_class = KITTIDataset
-        parameter_class = KITTIParameters
+    # choose what to do
+    read_data = 0
+    train_filter = 0
+    test_filter = 1
+    results_filter = 1
+    dataset_class = KITTIDataset
+    parameter_class = KITTIParameters
 
 
 if __name__ == '__main__':
     args = KITTIArgs()
     dataset = KITTIDataset(args)
     launch(KITTIArgs)
-
